@@ -1,8 +1,4 @@
-"""Placeholder tests for the CLI scaffold.
-
-These check the wiring only — that the three planned subcommands parse and
-dispatch. Real behaviour tests arrive with the implementations.
-"""
+"""Tests for the CLI: parsing, dispatch, and each command's behaviour."""
 
 import contextlib
 import io
@@ -19,10 +15,18 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(args.token, "abc123")
         self.assertIs(args.func, cli.cmd_auth)
 
-    def test_summary_and_streak_take_no_arguments(self):
+    def test_summary_and_streak_accept_an_optional_days_flag(self):
         parser = cli.build_parser()
-        self.assertIs(parser.parse_args(["summary"]).func, cli.cmd_summary)
-        self.assertIs(parser.parse_args(["streak"]).func, cli.cmd_streak)
+
+        summary_args = parser.parse_args(["summary"])
+        self.assertIs(summary_args.func, cli.cmd_summary)
+        self.assertEqual(summary_args.days, 30)
+
+        streak_args = parser.parse_args(["streak"])
+        self.assertIs(streak_args.func, cli.cmd_streak)
+        self.assertEqual(streak_args.days, 90)
+
+        self.assertEqual(parser.parse_args(["summary", "--days", "7"]).days, 7)
 
     def test_a_subcommand_is_required(self):
         with self.assertRaises(SystemExit):
@@ -30,23 +34,9 @@ class ParserTests(unittest.TestCase):
                 cli.build_parser().parse_args([])
 
 
-class DispatchTests(unittest.TestCase):
-    def run_cli(self, argv):
-        """Run main(argv), returning (exit_code, stdout)."""
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            code = cli.main(argv)
-        return code, out.getvalue()
+class CliTestCase(ConfigFileTestCase):
+    """Base for tests that run the CLI end to end against a temp config path."""
 
-    def test_still_stubbed_commands_succeed_and_say_so(self):
-        for argv in (["summary"], ["streak"]):
-            with self.subTest(argv=argv):
-                code, stdout = self.run_cli(argv)
-                self.assertEqual(code, 0)
-                self.assertIn(cli.NOT_IMPLEMENTED, stdout)
-
-
-class AuthTests(ConfigFileTestCase):
     def run_cli(self, argv):
         """Run main(argv), returning (exit_code, stdout, stderr)."""
         out, err = io.StringIO(), io.StringIO()
@@ -54,6 +44,8 @@ class AuthTests(ConfigFileTestCase):
             code = cli.main(argv)
         return code, out.getvalue(), err.getvalue()
 
+
+class AuthTests(CliTestCase):
     @mock.patch("gh_dashboard.cli.github_api.verify_token")
     def test_success_stores_the_token_and_greets_the_user(self, mock_verify):
         mock_verify.return_value = {"login": "octocat"}
@@ -83,6 +75,103 @@ class AuthTests(ConfigFileTestCase):
         self.assertEqual(code, 1)
         self.assertIn("empty", stderr)
         mock_verify.assert_not_called()
+
+
+class SummaryTests(CliTestCase):
+    def test_not_authenticated_is_a_clean_error(self):
+        code, _, stderr = self.run_cli(["summary"])
+        self.assertEqual(code, 1)
+        self.assertIn("not authenticated", stderr)
+
+    @mock.patch("gh_dashboard.cli.github_api.recent_activity")
+    def test_not_authenticated_never_calls_recent_activity(self, mock_recent):
+        self.run_cli(["summary"])
+        mock_recent.assert_not_called()
+
+    @mock.patch("gh_dashboard.cli.github_api.recent_activity")
+    def test_prints_totals_and_a_per_repo_breakdown(self, mock_recent):
+        config.save_token("abc123")
+        mock_recent.return_value = [
+            {"repo": "a/one"},
+            {"repo": "a/one"},
+            {"repo": "b/two"},
+        ]
+
+        code, stdout, _ = self.run_cli(["summary"])
+
+        self.assertEqual(code, 0)
+        self.assertIn("3 commits across 2 repositories", stdout)
+        self.assertIn("a/one", stdout)
+        self.assertIn("b/two", stdout)
+        mock_recent.assert_called_once_with("abc123", 30)  # default --days
+
+    @mock.patch("gh_dashboard.cli.github_api.recent_activity")
+    def test_days_flag_is_passed_through(self, mock_recent):
+        config.save_token("abc123")
+        mock_recent.return_value = []
+
+        self.run_cli(["summary", "--days", "7"])
+
+        mock_recent.assert_called_once_with("abc123", 7)
+
+    @mock.patch("gh_dashboard.cli.github_api.recent_activity")
+    def test_a_github_error_is_rendered_and_exits_1(self, mock_recent):
+        config.save_token("abc123")
+        mock_recent.side_effect = github_api.GitHubError("boom")
+
+        code, _, stderr = self.run_cli(["summary"])
+
+        self.assertEqual(code, 1)
+        self.assertIn("boom", stderr)
+
+    def test_corrupt_config_file_is_a_clean_error(self):
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        self.config_path.write_text("not json", encoding="utf-8")
+
+        code, _, stderr = self.run_cli(["summary"])
+
+        self.assertEqual(code, 1)
+        self.assertIn("error:", stderr)
+
+
+class StreakTests(CliTestCase):
+    def test_not_authenticated_is_a_clean_error(self):
+        code, _, stderr = self.run_cli(["streak"])
+        self.assertEqual(code, 1)
+        self.assertIn("not authenticated", stderr)
+
+    @mock.patch("gh_dashboard.cli.activity.compute_streak")
+    @mock.patch("gh_dashboard.cli.github_api.recent_activity")
+    def test_prints_current_and_longest(self, mock_recent, mock_streak):
+        config.save_token("abc123")
+        mock_recent.return_value = []
+        mock_streak.return_value = (5, 12)
+
+        code, stdout, _ = self.run_cli(["streak"])
+
+        self.assertEqual(code, 0)
+        self.assertIn("Current streak: 5 days", stdout)
+        self.assertIn("Longest streak in the last 90 days: 12 days", stdout)
+        mock_recent.assert_called_once_with("abc123", 90)  # default --days
+
+    @mock.patch("gh_dashboard.cli.github_api.recent_activity")
+    def test_days_flag_is_passed_through(self, mock_recent):
+        config.save_token("abc123")
+        mock_recent.return_value = []
+
+        self.run_cli(["streak", "--days", "365"])
+
+        mock_recent.assert_called_once_with("abc123", 365)
+
+    @mock.patch("gh_dashboard.cli.github_api.recent_activity")
+    def test_a_github_error_is_rendered_and_exits_1(self, mock_recent):
+        config.save_token("abc123")
+        mock_recent.side_effect = github_api.GitHubError("boom")
+
+        code, _, stderr = self.run_cli(["streak"])
+
+        self.assertEqual(code, 1)
+        self.assertIn("boom", stderr)
 
 
 if __name__ == "__main__":

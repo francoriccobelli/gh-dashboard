@@ -13,9 +13,18 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import __version__, config, github_api
+from . import __version__, activity, config, github_api
 
-NOT_IMPLEMENTED = "not implemented yet"
+
+def _token_or_hint() -> str | None:
+    """Return the stored token, or print a hint and return ``None`` if there isn't one."""
+    token = config.load_token()
+    if token is None:
+        print(
+            "error: not authenticated — run `gh-dashboard auth <token>` first",
+            file=sys.stderr,
+        )
+    return token
 
 
 def cmd_auth(args: argparse.Namespace) -> int:
@@ -38,14 +47,39 @@ def cmd_auth(args: argparse.Namespace) -> int:
 
 
 def cmd_summary(args: argparse.Namespace) -> int:
-    """Print a summary of recent GitHub activity."""
-    print(NOT_IMPLEMENTED)
+    """Print a commit count and per-repo breakdown for the last ``args.days`` days."""
+    token = _token_or_hint()
+    if token is None:
+        return 1
+
+    commits = github_api.recent_activity(token, args.days)
+    counts = activity.count_by_repo(commits)
+    total = sum(counts.values())
+
+    commit_word = "commit" if total == 1 else "commits"
+    repo_word = "repository" if len(counts) == 1 else "repositories"
+    print(f"Last {args.days} days: {total} {commit_word} across {len(counts)} {repo_word}")
+
+    top_repos = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
+    for repo, count in top_repos:
+        print(f"  {repo:<30} {count}")
     return 0
 
 
 def cmd_streak(args: argparse.Namespace) -> int:
-    """Print the current run of consecutive days with commits."""
-    print(NOT_IMPLEMENTED)
+    """Print the current and longest run of consecutive days with a commit."""
+    token = _token_or_hint()
+    if token is None:
+        return 1
+
+    commits = github_api.recent_activity(token, args.days)
+    current, longest = activity.compute_streak(commits)
+
+    print(f"Current streak: {current} day{'s' if current != 1 else ''}")
+    print(
+        f"Longest streak in the last {args.days} days: "
+        f"{longest} day{'s' if longest != 1 else ''}"
+    )
     return 0
 
 
@@ -72,9 +106,15 @@ def build_parser() -> argparse.ArgumentParser:
     auth.set_defaults(func=cmd_auth)
 
     summary = subparsers.add_parser("summary", help="summarize recent activity")
+    summary.add_argument(
+        "--days", type=int, default=30, help="how many days back to look (default: 30)"
+    )
     summary.set_defaults(func=cmd_summary)
 
     streak = subparsers.add_parser("streak", help="show your current commit streak")
+    streak.add_argument(
+        "--days", type=int, default=90, help="how many days back to look (default: 90)"
+    )
     streak.set_defaults(func=cmd_streak)
 
     return parser
@@ -85,14 +125,15 @@ def main(argv: list[str] | None = None) -> int:
 
     ``argv`` defaults to ``sys.argv[1:]``; taking it as a parameter is what
     lets tests drive ``main`` directly. This is also the single place that
-    turns a ``GitHubError`` or an ``OSError`` into a one-line stderr message,
-    so no handler needs its own try/except.
+    turns a ``GitHubError``, an ``OSError``, or a ``ValueError`` (a corrupt
+    config file) into a one-line stderr message, so no handler needs its own
+    try/except.
     """
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (github_api.GitHubError, OSError) as e:
+    except (github_api.GitHubError, OSError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
 

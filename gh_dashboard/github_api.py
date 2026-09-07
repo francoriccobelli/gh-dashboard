@@ -8,23 +8,37 @@ response instead of a live account.
 
 Failures surface as :class:`GitHubError` so ``cli.main`` has one exception type
 to turn into a one-line message.
-
-Nothing here is implemented yet — the functions below record the intended
-shape. ``requests`` stays unimported until something actually issues a request.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+import requests
+
 API_ROOT = "https://api.github.com"
 
 #: Sent on every request; GitHub asks callers to pin the API version.
 API_VERSION = "2022-11-28"
 
+#: GitHub rejects requests with no User-Agent.
+USER_AGENT = "gh-dashboard"
+
+#: Fail rather than hang if GitHub (or the network) doesn't respond.
+TIMEOUT_SECONDS = 10
+
 
 class GitHubError(Exception):
     """A request to GitHub failed: network trouble, bad token, or rate limit."""
+
+
+def _headers(token: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": API_VERSION,
+        "User-Agent": USER_AGENT,
+    }
 
 
 def verify_token(token: str) -> dict[str, Any]:
@@ -32,9 +46,22 @@ def verify_token(token: str) -> dict[str, Any]:
 
     ``GET /user``. Used by the ``auth`` command to fail fast on a bad token
     rather than storing one that will not work. Raises :class:`GitHubError` if
-    GitHub rejects the credentials.
+    GitHub rejects the credentials, returns an error, or can't be reached.
     """
-    raise NotImplementedError
+    try:
+        response = requests.get(
+            f"{API_ROOT}/user",
+            headers=_headers(token),
+            timeout=TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as e:
+        raise GitHubError(f"could not reach GitHub: {e}") from e
+
+    if response.status_code == 401:
+        raise GitHubError("GitHub rejected the token (401 Unauthorized)")
+    if not response.ok:
+        raise GitHubError(f"GitHub returned {response.status_code}")
+    return response.json()
 
 
 def list_repos(token: str) -> list[dict[str, Any]]:

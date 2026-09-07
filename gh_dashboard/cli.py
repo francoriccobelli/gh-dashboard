@@ -11,15 +11,29 @@ call them directly and assert on the return value.
 from __future__ import annotations
 
 import argparse
+import sys
 
-from . import __version__
+from . import __version__, config, github_api
 
 NOT_IMPLEMENTED = "not implemented yet"
 
 
 def cmd_auth(args: argparse.Namespace) -> int:
-    """Store a GitHub personal access token for later commands."""
-    print(NOT_IMPLEMENTED)
+    """Verify a GitHub personal access token and store it for later commands.
+
+    Rejects a blank token before making a network call. Everything else —
+    a rejected token, a filesystem error while saving — propagates as an
+    exception for :func:`main` to render; this handler has no try/except of
+    its own.
+    """
+    token = args.token.strip()
+    if not token:
+        print("error: token must not be empty", file=sys.stderr)
+        return 1
+
+    user = github_api.verify_token(token)
+    config.save_token(token)
+    print(f"Authenticated as {user['login']}")
     return 0
 
 
@@ -70,13 +84,17 @@ def main(argv: list[str] | None = None) -> int:
     """Parse ``argv`` and run the requested command, returning its exit code.
 
     ``argv`` defaults to ``sys.argv[1:]``; taking it as a parameter is what
-    lets tests drive ``main`` directly. This is also the single place that will
-    turn a ``GitHubError`` or an ``OSError`` into a one-line stderr message, so
-    no handler needs its own try/except.
+    lets tests drive ``main`` directly. This is also the single place that
+    turns a ``GitHubError`` or an ``OSError`` into a one-line stderr message,
+    so no handler needs its own try/except.
     """
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except (github_api.GitHubError, OSError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

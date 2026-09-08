@@ -5,12 +5,14 @@ code in this repository.
 
 ## Project state
 
-All three commands are implemented: `auth` stores a verified token, `summary`
-prints a commit count and per-repo breakdown, `streak` prints the current and
-longest run of consecutive days with a commit. `summary`/`streak` both accept
-an optional `--days` flag (defaults 30 / 90) and are bounded by that window —
-a streak longer than it gets undercounted, which is a documented trade-off,
-not a bug (see `activity.compute_streak`'s docstring).
+All four commands are implemented: `auth` stores a verified token, `logout`
+removes it, `summary` prints a commit count and per-repo breakdown, `streak`
+prints the current and longest run of consecutive days with a commit.
+`summary`/`streak` both accept an optional `--days` flag (defaults 30 / 90)
+and are bounded by that window — a streak longer than it gets undercounted,
+which is a documented trade-off, not a bug (see `activity.compute_streak`'s
+docstring). `logout` deliberately never calls `config.load_token()` (which can
+raise on a corrupt file) — see its docstring.
 
 ## Commands
 

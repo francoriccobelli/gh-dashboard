@@ -21,7 +21,7 @@ def _token_or_hint() -> str | None:
     token = config.load_token()
     if token is None:
         print(
-            "error: not authenticated — run `gh-dashboard auth <token>` first",
+            "error: not authenticated - run `gh-dashboard auth <token>` first",
             file=sys.stderr,
         )
     return token
@@ -43,6 +43,21 @@ def cmd_auth(args: argparse.Namespace) -> int:
     user = github_api.verify_token(token)
     config.save_token(token)
     print(f"Authenticated as {user['login']}")
+    return 0
+
+
+def cmd_logout(args: argparse.Namespace) -> int:
+    """Remove any stored GitHub access token.
+
+    Deliberately never calls :func:`config.load_token`, which parses the file
+    and can raise ``ValueError`` on a corrupt one — this command needs to be
+    the reliable way *out* of that state, not another way to hit it. Checking
+    existence directly and clearing unconditionally both succeed regardless
+    of whether the file is valid JSON.
+    """
+    was_authenticated = config.config_file().exists()
+    config.clear_token()
+    print("Logged out." if was_authenticated else "You weren't logged in.")
     return 0
 
 
@@ -104,6 +119,9 @@ def build_parser() -> argparse.ArgumentParser:
     auth = subparsers.add_parser("auth", help="store a GitHub access token")
     auth.add_argument("token", help="a GitHub personal access token")
     auth.set_defaults(func=cmd_auth)
+
+    logout = subparsers.add_parser("logout", help="remove the stored GitHub access token")
+    logout.set_defaults(func=cmd_logout)
 
     summary = subparsers.add_parser("summary", help="summarize recent activity")
     summary.add_argument(

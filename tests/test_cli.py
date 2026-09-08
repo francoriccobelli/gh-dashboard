@@ -28,6 +28,10 @@ class ParserTests(unittest.TestCase):
 
         self.assertEqual(parser.parse_args(["summary", "--days", "7"]).days, 7)
 
+    def test_logout_takes_no_arguments(self):
+        args = cli.build_parser().parse_args(["logout"])
+        self.assertIs(args.func, cli.cmd_logout)
+
     def test_a_subcommand_is_required(self):
         with self.assertRaises(SystemExit):
             with contextlib.redirect_stderr(io.StringIO()):
@@ -75,6 +79,36 @@ class AuthTests(CliTestCase):
         self.assertEqual(code, 1)
         self.assertIn("empty", stderr)
         mock_verify.assert_not_called()
+
+
+class LogoutTests(CliTestCase):
+    def test_removes_an_existing_token(self):
+        config.save_token("abc123")
+
+        code, stdout, _ = self.run_cli(["logout"])
+
+        self.assertEqual(code, 0)
+        self.assertIn("Logged out", stdout)
+        self.assertIsNone(config.load_token())
+
+    def test_is_still_a_success_when_not_authenticated(self):
+        code, stdout, _ = self.run_cli(["logout"])
+
+        self.assertEqual(code, 0)
+        self.assertIn("weren't logged in", stdout)
+
+    def test_clears_a_corrupt_config_file_without_erroring(self):
+        # This is the case the whole design is for: logout must be the
+        # reliable way out of a corrupt config, not another command that
+        # can fail on it.
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        self.config_path.write_text("not json", encoding="utf-8")
+
+        code, stdout, _ = self.run_cli(["logout"])
+
+        self.assertEqual(code, 0)
+        self.assertIn("Logged out", stdout)
+        self.assertFalse(self.config_path.exists())
 
 
 class SummaryTests(CliTestCase):
